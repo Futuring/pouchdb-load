@@ -2,11 +2,11 @@
 (function (process,global){
 'use strict';
 
-var Promise = require(20);
-var pouchUtils = require(21);
+var Promise = require(19);
+var pouchUtils = require(20);
 exports.uuid = pouchUtils.uuid;
 
-exports.extend = require(17);
+exports.extend = require(16);
 
 /* istanbul ignore next */
 exports.once = function (fun) {
@@ -83,8 +83,8 @@ exports.explain404 = function (str) {
   }
 };
 
-}).call(this,require(22),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"17":17,"2":2,"20":20,"21":21,"22":22,"7":7}],2:[function(require,module,exports){
+}).call(this,require(21),typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
+},{"16":16,"19":19,"2":2,"20":20,"21":21,"7":7}],2:[function(require,module,exports){
 'use strict';
 
 module.exports = argsArray;
@@ -105,7 +105,7 @@ function argsArray(fun) {
   };
 }
 },{}],3:[function(require,module,exports){
-
+(function (process){
 /**
  * This is the web browser implementation of `debug()`.
  *
@@ -145,13 +145,23 @@ exports.colors = [
  */
 
 function useColors() {
+  // NB: In an Electron preload script, document will be defined but not fully
+  // initialized. Since we know we're in Chrome, we'll just detect this case
+  // explicitly
+  if (typeof window !== 'undefined' && window && typeof window.process !== 'undefined' && window.process.type === 'renderer') {
+    return true;
+  }
+
   // is webkit? http://stackoverflow.com/a/16459606/376773
-  return ('WebkitAppearance' in document.documentElement.style) ||
+  // document is undefined in react-native: https://github.com/facebook/react-native/pull/1632
+  return (typeof document !== 'undefined' && document && 'WebkitAppearance' in document.documentElement.style) ||
     // is firebug? http://stackoverflow.com/a/398120/376773
-    (window.console && (console.firebug || (console.exception && console.table))) ||
+    (typeof window !== 'undefined' && window && window.console && (console.firebug || (console.exception && console.table))) ||
     // is firefox >= v31?
     // https://developer.mozilla.org/en-US/docs/Tools/Web_Console#Styling_messages
-    (navigator.userAgent.toLowerCase().match(/firefox\/(\d+)/) && parseInt(RegExp.$1, 10) >= 31);
+    (typeof navigator !== 'undefined' && navigator && navigator.userAgent && navigator.userAgent.toLowerCase().match(/firefox\/(\d+)/) && parseInt(RegExp.$1, 10) >= 31) ||
+    // double check webkit in userAgent just in case we are in a worker
+    (typeof navigator !== 'undefined' && navigator && navigator.userAgent && navigator.userAgent.toLowerCase().match(/applewebkit\/(\d+)/));
 }
 
 /**
@@ -159,7 +169,11 @@ function useColors() {
  */
 
 exports.formatters.j = function(v) {
-  return JSON.stringify(v);
+  try {
+    return JSON.stringify(v);
+  } catch (err) {
+    return '[UnexpectedJSONParseError]: ' + err.message;
+  }
 };
 
 
@@ -169,8 +183,7 @@ exports.formatters.j = function(v) {
  * @api public
  */
 
-function formatArgs() {
-  var args = arguments;
+function formatArgs(args) {
   var useColors = this.useColors;
 
   args[0] = (useColors ? '%c' : '')
@@ -180,17 +193,17 @@ function formatArgs() {
     + (useColors ? '%c ' : ' ')
     + '+' + exports.humanize(this.diff);
 
-  if (!useColors) return args;
+  if (!useColors) return;
 
   var c = 'color: ' + this.color;
-  args = [args[0], c, 'color: inherit'].concat(Array.prototype.slice.call(args, 1));
+  args.splice(1, 0, c, 'color: inherit')
 
   // the final "%c" is somewhat tricky, because there could be other
   // arguments passed either before or after the %c, so we need to
   // figure out the correct index to insert the CSS into
   var index = 0;
   var lastC = 0;
-  args[0].replace(/%[a-z%]/g, function(match) {
+  args[0].replace(/%[a-zA-Z%]/g, function(match) {
     if ('%%' === match) return;
     index++;
     if ('%c' === match) {
@@ -201,7 +214,6 @@ function formatArgs() {
   });
 
   args.splice(lastC, 0, c);
-  return args;
 }
 
 /**
@@ -244,11 +256,14 @@ function save(namespaces) {
  */
 
 function load() {
-  var r;
   try {
-    r = exports.storage.debug;
+    return exports.storage.debug;
   } catch(e) {}
-  return r;
+
+  // If debug isn't set in LS, and we're in Electron, try to load $DEBUG
+  if (typeof process !== 'undefined' && 'env' in process) {
+    return process.env.DEBUG;
+  }
 }
 
 /**
@@ -268,13 +283,14 @@ exports.enable(load());
  * @api private
  */
 
-function localstorage(){
+function localstorage() {
   try {
     return window.localStorage;
   } catch (e) {}
 }
 
-},{"4":4}],4:[function(require,module,exports){
+}).call(this,require(21))
+},{"21":21,"4":4}],4:[function(require,module,exports){
 
 /**
  * This is the common logic for both the Node.js and web browser
@@ -283,12 +299,12 @@ function localstorage(){
  * Expose `debug()` as the module.
  */
 
-exports = module.exports = debug;
+exports = module.exports = createDebug.debug = createDebug.default = createDebug;
 exports.coerce = coerce;
 exports.disable = disable;
 exports.enable = enable;
 exports.enabled = enabled;
-exports.humanize = require(10);
+exports.humanize = require(9);
 
 /**
  * The currently active debug mode names, and names to skip.
@@ -300,16 +316,10 @@ exports.skips = [];
 /**
  * Map of special "%n" handling functions, for the debug "format" argument.
  *
- * Valid key names are a single, lowercased letter, i.e. "n".
+ * Valid key names are a single, lower or upper-case letter, i.e. "n" and "N".
  */
 
 exports.formatters = {};
-
-/**
- * Previously assigned color.
- */
-
-var prevColor = 0;
 
 /**
  * Previous log timestamp.
@@ -319,13 +329,20 @@ var prevTime;
 
 /**
  * Select a color.
- *
+ * @param {String} namespace
  * @return {Number}
  * @api private
  */
 
-function selectColor() {
-  return exports.colors[prevColor++ % exports.colors.length];
+function selectColor(namespace) {
+  var hash = 0, i;
+
+  for (i in namespace) {
+    hash  = ((hash << 5) - hash) + namespace.charCodeAt(i);
+    hash |= 0; // Convert to 32bit integer
+  }
+
+  return exports.colors[Math.abs(hash) % exports.colors.length];
 }
 
 /**
@@ -336,17 +353,13 @@ function selectColor() {
  * @api public
  */
 
-function debug(namespace) {
+function createDebug(namespace) {
 
-  // define the `disabled` version
-  function disabled() {
-  }
-  disabled.enabled = false;
+  function debug() {
+    // disabled?
+    if (!debug.enabled) return;
 
-  // define the `enabled` version
-  function enabled() {
-
-    var self = enabled;
+    var self = debug;
 
     // set `diff` timestamp
     var curr = +new Date();
@@ -356,22 +369,22 @@ function debug(namespace) {
     self.curr = curr;
     prevTime = curr;
 
-    // add the `color` if not set
-    if (null == self.useColors) self.useColors = exports.useColors();
-    if (null == self.color && self.useColors) self.color = selectColor();
-
-    var args = Array.prototype.slice.call(arguments);
+    // turn the `arguments` into a proper Array
+    var args = new Array(arguments.length);
+    for (var i = 0; i < args.length; i++) {
+      args[i] = arguments[i];
+    }
 
     args[0] = exports.coerce(args[0]);
 
     if ('string' !== typeof args[0]) {
-      // anything else let's inspect with %o
-      args = ['%o'].concat(args);
+      // anything else let's inspect with %O
+      args.unshift('%O');
     }
 
     // apply any `formatters` transformations
     var index = 0;
-    args[0] = args[0].replace(/%([a-z%])/g, function(match, format) {
+    args[0] = args[0].replace(/%([a-zA-Z%])/g, function(match, format) {
       // if we encounter an escaped % then don't increase the array index
       if (match === '%%') return match;
       index++;
@@ -387,19 +400,24 @@ function debug(namespace) {
       return match;
     });
 
-    if ('function' === typeof exports.formatArgs) {
-      args = exports.formatArgs.apply(self, args);
-    }
-    var logFn = enabled.log || exports.log || console.log.bind(console);
+    // apply env-specific formatting (colors, etc.)
+    exports.formatArgs.call(self, args);
+
+    var logFn = debug.log || exports.log || console.log.bind(console);
     logFn.apply(self, args);
   }
-  enabled.enabled = true;
 
-  var fn = exports.enabled(namespace) ? enabled : disabled;
+  debug.namespace = namespace;
+  debug.enabled = exports.enabled(namespace);
+  debug.useColors = exports.useColors();
+  debug.color = selectColor(namespace);
 
-  fn.namespace = namespace;
+  // env-specific initialization logic for debug instances
+  if ('function' === typeof exports.init) {
+    exports.init(debug);
+  }
 
-  return fn;
+  return debug;
 }
 
 /**
@@ -473,7 +491,7 @@ function coerce(val) {
   return val;
 }
 
-},{"10":10}],5:[function(require,module,exports){
+},{"9":9}],5:[function(require,module,exports){
 // Copyright Joyent, Inc. and other Node contributors.
 //
 // Permission is hereby granted, free of charge, to any person obtaining a
@@ -876,41 +894,6 @@ if (typeof Object.create === 'function') {
 }
 
 },{}],8:[function(require,module,exports){
-(function(factory) {
-  if(typeof exports === 'object') {
-    factory(exports);
-  } else {
-    factory(this);
-  }
-}).call(this, function(root) { 
-
-  var slice   = Array.prototype.slice,
-      each    = Array.prototype.forEach;
-
-  var extend = function(obj) {
-    if(typeof obj !== 'object') throw obj + ' is not an object' ;
-
-    var sources = slice.call(arguments, 1); 
-
-    each.call(sources, function(source) {
-      if(source) {
-        for(var prop in source) {
-          if(typeof source[prop] === 'object' && obj[prop]) {
-            extend.call(obj, obj[prop], source[prop]);
-          } else {
-            obj[prop] = source[prop];
-          }
-        } 
-      }
-    });
-
-    return obj;
-  }
-
-  root.extend = extend;
-});
-
-},{}],9:[function(require,module,exports){
 'use strict';
 var immediate = require(6);
 
@@ -1165,16 +1148,16 @@ function race(iterable) {
   }
 }
 
-},{"6":6}],10:[function(require,module,exports){
+},{"6":6}],9:[function(require,module,exports){
 /**
  * Helpers.
  */
 
-var s = 1000;
-var m = s * 60;
-var h = m * 60;
-var d = h * 24;
-var y = d * 365.25;
+var s = 1000
+var m = s * 60
+var h = m * 60
+var d = h * 24
+var y = d * 365.25
 
 /**
  * Parse or format the given `val`.
@@ -1185,17 +1168,23 @@ var y = d * 365.25;
  *
  * @param {String|Number} val
  * @param {Object} options
+ * @throws {Error} throw an error if val is not a non-empty string or a number
  * @return {String|Number}
  * @api public
  */
 
-module.exports = function(val, options){
-  options = options || {};
-  if ('string' == typeof val) return parse(val);
-  return options.long
-    ? long(val)
-    : short(val);
-};
+module.exports = function (val, options) {
+  options = options || {}
+  var type = typeof val
+  if (type === 'string' && val.length > 0) {
+    return parse(val)
+  } else if (type === 'number' && isNaN(val) === false) {
+    return options.long ?
+			fmtLong(val) :
+			fmtShort(val)
+  }
+  throw new Error('val is not a non-empty string or a valid number. val=' + JSON.stringify(val))
+}
 
 /**
  * Parse the given `str` and return milliseconds.
@@ -1206,47 +1195,53 @@ module.exports = function(val, options){
  */
 
 function parse(str) {
-  str = '' + str;
-  if (str.length > 10000) return;
-  var match = /^((?:\d+)?\.?\d+) *(milliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|years?|yrs?|y)?$/i.exec(str);
-  if (!match) return;
-  var n = parseFloat(match[1]);
-  var type = (match[2] || 'ms').toLowerCase();
+  str = String(str)
+  if (str.length > 10000) {
+    return
+  }
+  var match = /^((?:\d+)?\.?\d+) *(milliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|years?|yrs?|y)?$/i.exec(str)
+  if (!match) {
+    return
+  }
+  var n = parseFloat(match[1])
+  var type = (match[2] || 'ms').toLowerCase()
   switch (type) {
     case 'years':
     case 'year':
     case 'yrs':
     case 'yr':
     case 'y':
-      return n * y;
+      return n * y
     case 'days':
     case 'day':
     case 'd':
-      return n * d;
+      return n * d
     case 'hours':
     case 'hour':
     case 'hrs':
     case 'hr':
     case 'h':
-      return n * h;
+      return n * h
     case 'minutes':
     case 'minute':
     case 'mins':
     case 'min':
     case 'm':
-      return n * m;
+      return n * m
     case 'seconds':
     case 'second':
     case 'secs':
     case 'sec':
     case 's':
-      return n * s;
+      return n * s
     case 'milliseconds':
     case 'millisecond':
     case 'msecs':
     case 'msec':
     case 'ms':
-      return n;
+      return n
+    default:
+      return undefined
   }
 }
 
@@ -1258,12 +1253,20 @@ function parse(str) {
  * @api private
  */
 
-function short(ms) {
-  if (ms >= d) return Math.round(ms / d) + 'd';
-  if (ms >= h) return Math.round(ms / h) + 'h';
-  if (ms >= m) return Math.round(ms / m) + 'm';
-  if (ms >= s) return Math.round(ms / s) + 's';
-  return ms + 'ms';
+function fmtShort(ms) {
+  if (ms >= d) {
+    return Math.round(ms / d) + 'd'
+  }
+  if (ms >= h) {
+    return Math.round(ms / h) + 'h'
+  }
+  if (ms >= m) {
+    return Math.round(ms / m) + 'm'
+  }
+  if (ms >= s) {
+    return Math.round(ms / s) + 's'
+  }
+  return ms + 'ms'
 }
 
 /**
@@ -1274,12 +1277,12 @@ function short(ms) {
  * @api private
  */
 
-function long(ms) {
-  return plural(ms, d, 'day')
-    || plural(ms, h, 'hour')
-    || plural(ms, m, 'minute')
-    || plural(ms, s, 'second')
-    || ms + ' ms';
+function fmtLong(ms) {
+  return plural(ms, d, 'day') ||
+    plural(ms, h, 'hour') ||
+    plural(ms, m, 'minute') ||
+    plural(ms, s, 'second') ||
+    ms + ' ms'
 }
 
 /**
@@ -1287,22 +1290,27 @@ function long(ms) {
  */
 
 function plural(ms, n, name) {
-  if (ms < n) return;
-  if (ms < n * 1.5) return Math.floor(ms / n) + ' ' + name;
-  return Math.ceil(ms / n) + ' ' + name + 's';
+  if (ms < n) {
+    return
+  }
+  if (ms < n * 1.5) {
+    return Math.floor(ms / n) + ' ' + name
+  }
+  return Math.ceil(ms / n) + ' ' + name + 's'
 }
 
-},{}],11:[function(require,module,exports){
+},{}],10:[function(require,module,exports){
 'use strict';
 
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
-var pouchdbBinaryUtils = require(12);
-var Promise = _interopDefault(require(20));
-var jsExtend = require(8);
-var pouchdbErrors = require(16);
-var pouchdbUtils = require(21);
+var pouchdbUtils = require(20);
+var Promise = _interopDefault(require(19));
+var pouchdbBinaryUtils = require(11);
+var pouchdbErrors = require(15);
 
+/* global fetch */
+/* global Headers */
 function wrappedFetch() {
   var wrappedPromise = {};
 
@@ -1347,13 +1355,9 @@ function fetchRequest(options, callback) {
       'application/json');
   }
 
-  if (options.body && (options.body instanceof Blob)) {
-    pouchdbBinaryUtils.readAsArrayBuffer(options.body, function (arrayBuffer) {
-      fetchOptions.body = arrayBuffer;
-    });
-  } else if (options.body &&
-             options.processData &&
-             typeof options.body !== 'string') {
+  if (options.body &&
+      options.processData &&
+      typeof options.body !== 'string') {
     fetchOptions.body = JSON.stringify(options.body);
   } else if ('body' in options) {
     fetchOptions.body = options.body;
@@ -1394,10 +1398,15 @@ function fetchRequest(options, callback) {
     if (response.statusCode >= 200 && response.statusCode < 300) {
       callback(null, response, result);
     } else {
-      callback(result, response);
+      result.status = response.statusCode;
+      callback(result);
     }
   }).catch(function (error) {
-    callback(error, response);
+    if (!error) {
+      // this happens when the listener is canceled
+      error = new Error('canceled');
+    }
+    callback(error);
   });
 
   return {abort: wrappedPromise.reject};
@@ -1410,11 +1419,28 @@ function xhRequest(options, callback) {
 
   var abortReq = function () {
     xhr.abort();
+    cleanUp();
   };
 
   var timeoutReq = function () {
     timedout = true;
     xhr.abort();
+    cleanUp();
+  };
+
+  var ret = {abort: abortReq};
+
+  var cleanUp = function () {
+    clearTimeout(timer);
+    ret.abort = function () {};
+    if (xhr) {
+      xhr.onprogress = undefined;
+      if (xhr.upload) {
+        xhr.upload.onprogress = undefined;
+      }
+      xhr.onreadystatechange = undefined;
+      xhr = undefined;
+    }
   };
 
   if (options.xhr) {
@@ -1496,7 +1522,7 @@ function xhRequest(options, callback) {
       if (timedout) {
         err = new Error('ETIMEDOUT');
         err.code = 'ETIMEDOUT';
-      } else {
+      } else if (typeof xhr.response === 'string') {
         try {
           err = JSON.parse(xhr.response);
         } catch(e) {}
@@ -1504,6 +1530,7 @@ function xhRequest(options, callback) {
       err.status = xhr.status;
       callback(err);
     }
+    cleanUp();
   };
 
   if (options.body && (options.body instanceof Blob)) {
@@ -1514,7 +1541,7 @@ function xhRequest(options, callback) {
     xhr.send(options.body);
   }
 
-  return {abort: abortReq};
+  return ret;
 }
 
 function testXhr() {
@@ -1529,7 +1556,7 @@ function testXhr() {
 var hasXhr = testXhr();
 
 function ajax$1(options, callback) {
-  if (hasXhr || options.xhr) {
+  if (!false && (hasXhr || options.xhr)) {
     return xhRequest(options, callback);
   } else {
     return fetchRequest(options, callback);
@@ -1556,7 +1583,7 @@ function ajaxCore(options, callback) {
     cache: false
   };
 
-  options = jsExtend.extend(defaultOptions, options);
+  options = pouchdbUtils.assign(defaultOptions, options);
 
   function onSuccess(obj, resp, cb) {
     if (!options.binary && options.json && typeof obj === 'string') {
@@ -1661,16 +1688,17 @@ function ajax(opts, callback) {
 }
 
 module.exports = ajax;
-},{"12":12,"16":16,"20":20,"21":21,"8":8}],12:[function(require,module,exports){
+
+},{"11":11,"15":15,"19":19,"20":20}],11:[function(require,module,exports){
 'use strict';
 
 Object.defineProperty(exports, '__esModule', { value: true });
 
-var atob$1 = function (str) {
+var thisAtob = function (str) {
   return atob(str);
 };
 
-var btoa$1 = function (str) {
+var thisBtoa = function (str) {
   return btoa(str);
 };
 
@@ -1716,7 +1744,7 @@ function binStringToBluffer(binString, type) {
 }
 
 function b64ToBluffer(b64, type) {
-  return binStringToBluffer(atob$1(b64), type);
+  return binStringToBluffer(thisAtob(b64), type);
 }
 
 //Can't find original post, but this is close
@@ -1765,7 +1793,7 @@ function blobToBinaryString(blobOrBuffer, callback) {
 
 function blobToBase64(blobOrBuffer, callback) {
   blobToBinaryString(blobOrBuffer, function (base64) {
-    callback(btoa$1(base64));
+    callback(thisBtoa(base64));
   });
 }
 
@@ -1789,8 +1817,8 @@ function readAsArrayBuffer(blob, callback) {
 function typedBuffer() {
 }
 
-exports.atob = atob$1;
-exports.btoa = btoa$1;
+exports.atob = thisAtob;
+exports.btoa = thisBtoa;
 exports.base64StringToBlobOrBuffer = b64ToBluffer;
 exports.binaryStringToArrayBuffer = binaryStringToArrayBuffer;
 exports.binaryStringToBlobOrBuffer = binStringToBluffer;
@@ -1800,14 +1828,15 @@ exports.blobOrBufferToBinaryString = blobToBinaryString;
 exports.readAsArrayBuffer = readAsArrayBuffer;
 exports.readAsBinaryString = readAsBinaryString;
 exports.typedBuffer = typedBuffer;
-},{}],13:[function(require,module,exports){
+
+},{}],12:[function(require,module,exports){
 'use strict';
 
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
-var Promise = _interopDefault(require(20));
-var pouchdbUtils = require(21);
-var pouchdbCollate = require(14);
+var Promise = _interopDefault(require(19));
+var pouchdbUtils = require(20);
+var pouchdbCollate = require(13);
 
 var CHECKPOINT_VERSION = 1;
 var REPLICATOR = "pouchdb";
@@ -1842,6 +1871,12 @@ function updateCheckpoint(db, id, checkpoint, session, returnValue) {
     if (returnValue.cancelled) {
       return;
     }
+
+    // if the checkpoint has not changed, do not update
+    if (doc.last_seq === checkpoint) {
+      return;
+    }
+
     // Filter out current entry for this replication
     doc.history = (doc.history || []).filter(function (item) {
       return item.session_id !== session;
@@ -2046,46 +2081,59 @@ function isForbiddenError(err) {
 }
 
 module.exports = Checkpointer;
-},{"14":14,"20":20,"21":21}],14:[function(require,module,exports){
+
+},{"13":13,"19":19,"20":20}],13:[function(require,module,exports){
 'use strict';
+
+Object.defineProperty(exports, '__esModule', { value: true });
+
+function pad(str, padWith, upToLength) {
+  var padding = '';
+  var targetLength = upToLength - str.length;
+  /* istanbul ignore next */
+  while (padding.length < targetLength) {
+    padding += padWith;
+  }
+  return padding;
+}
+
+function padLeft(str, padWith, upToLength) {
+  var padding = pad(str, padWith, upToLength);
+  return padding + str;
+}
 
 var MIN_MAGNITUDE = -324; // verified by -Number.MIN_VALUE
 var MAGNITUDE_DIGITS = 3; // ditto
 var SEP = ''; // set to '_' for easier debugging 
 
-var utils = require(15);
-
-exports.collate = function (a, b) {
+function collate(a, b) {
 
   if (a === b) {
     return 0;
   }
 
-  a = exports.normalizeKey(a);
-  b = exports.normalizeKey(b);
+  a = normalizeKey(a);
+  b = normalizeKey(b);
 
   var ai = collationIndex(a);
   var bi = collationIndex(b);
   if ((ai - bi) !== 0) {
     return ai - bi;
   }
-  if (a === null) {
-    return 0;
-  }
   switch (typeof a) {
     case 'number':
       return a - b;
     case 'boolean':
-      return a === b ? 0 : (a < b ? -1 : 1);
+      return a < b ? -1 : 1;
     case 'string':
       return stringCollate(a, b);
   }
   return Array.isArray(a) ? arrayCollate(a, b) : objectCollate(a, b);
-};
+}
 
 // couch considers null/NaN/Infinity/-Infinity === undefined,
 // for the purposes of mapreduce indexes. also, dates get stringified.
-exports.normalizeKey = function (key) {
+function normalizeKey(key) {
   switch (typeof key) {
     case 'undefined':
       return null;
@@ -2100,8 +2148,9 @@ exports.normalizeKey = function (key) {
         var len = key.length;
         key = new Array(len);
         for (var i = 0; i < len; i++) {
-          key[i] = exports.normalizeKey(origKey[i]);
+          key[i] = normalizeKey(origKey[i]);
         }
+      /* istanbul ignore next */
       } else if (key instanceof Date) {
         return key.toJSON();
       } else if (key !== null) { // generic object
@@ -2110,14 +2159,14 @@ exports.normalizeKey = function (key) {
           if (origKey.hasOwnProperty(k)) {
             var val = origKey[k];
             if (typeof val !== 'undefined') {
-              key[k] = exports.normalizeKey(val);
+              key[k] = normalizeKey(val);
             }
           }
         }
       }
   }
   return key;
-};
+}
 
 function indexify(key) {
   if (key !== null) {
@@ -2144,13 +2193,13 @@ function indexify(key) {
         var result = '';
         if (isArray) {
           while (++i < len) {
-            result += exports.toIndexableString(arr[i]);
+            result += toIndexableString(arr[i]);
           }
         } else {
           while (++i < len) {
             var objKey = arr[i];
-            result += exports.toIndexableString(objKey) +
-                exports.toIndexableString(key[objKey]);
+            result += toIndexableString(objKey) +
+                toIndexableString(key[objKey]);
           }
         }
         return result;
@@ -2162,11 +2211,11 @@ function indexify(key) {
 // convert the given key to a string that would be appropriate
 // for lexical sorting, e.g. within a database, where the
 // sorting is the same given by the collate() function.
-exports.toIndexableString = function (key) {
+function toIndexableString(key) {
   var zero = '\u0000';
-  key = exports.normalizeKey(key);
+  key = normalizeKey(key);
   return collationIndex(key) + SEP + indexify(key) + zero;
-};
+}
 
 function parseNumber(str, i) {
   var originalIdx = i;
@@ -2181,6 +2230,7 @@ function parseNumber(str, i) {
     var numAsString = '';
     var magAsString = str.substring(i, i + MAGNITUDE_DIGITS);
     var magnitude = parseInt(magAsString, 10) + MIN_MAGNITUDE;
+    /* istanbul ignore next */
     if (neg) {
       magnitude = -magnitude;
     }
@@ -2198,11 +2248,14 @@ function parseNumber(str, i) {
     if (numAsString.length === 1) {
       num = parseInt(numAsString, 10);
     } else {
+      /* istanbul ignore next */
       num = parseFloat(numAsString[0] + '.' + numAsString[1]);
     }
+    /* istanbul ignore next */
     if (neg) {
       num = num - 10;
     }
+    /* istanbul ignore next */
     if (magnitude !== 0) {
       // parseFloat is more reliable than pow due to rounding errors
       // e.g. Number.MAX_VALUE would return Infinity if we did
@@ -2238,11 +2291,12 @@ function pop(stack, metaStack) {
   }
 }
 
-exports.parseIndexableString = function (str) {
+function parseIndexableString(str) {
   var stack = [];
   var metaStack = []; // stack for arrays and objects
   var i = 0;
 
+  /*eslint no-constant-condition: ["error", { "checkLoops": false }]*/
   while (true) {
     var collationIndex = str[i++];
     if (collationIndex === '\u0000') {
@@ -2268,6 +2322,7 @@ exports.parseIndexableString = function (str) {
         break;
       case '4':
         var parsedStr = '';
+        /*eslint no-constant-condition: ["error", { "checkLoops": false }]*/
         while (true) {
           var ch = str[i];
           if (ch === '\u0000') {
@@ -2293,17 +2348,19 @@ exports.parseIndexableString = function (str) {
         stack.push(objElement.element);
         metaStack.push(objElement);
         break;
+      /* istanbul ignore next */
       default:
         throw new Error(
-          'bad collationIndex or unexpectedly reached end of input: ' + collationIndex);
+          'bad collationIndex or unexpectedly reached end of input: ' +
+            collationIndex);
     }
   }
-};
+}
 
 function arrayCollate(a, b) {
   var len = Math.min(a.length, b.length);
   for (var i = 0; i < len; i++) {
-    var sort = exports.collate(a[i], b[i]);
+    var sort = collate(a[i], b[i]);
     if (sort !== 0) {
       return sort;
     }
@@ -2322,12 +2379,12 @@ function objectCollate(a, b) {
   var len = Math.min(ak.length, bk.length);
   for (var i = 0; i < len; i++) {
     // First sort the keys
-    var sort = exports.collate(ak[i], bk[i]);
+    var sort = collate(ak[i], bk[i]);
     if (sort !== 0) {
       return sort;
     }
     // if the keys are equal sort the values
-    sort = exports.collate(a[ak[i]], b[bk[i]]);
+    sort = collate(a[ak[i]], b[bk[i]]);
     if (sort !== 0) {
       return sort;
     }
@@ -2353,6 +2410,7 @@ function collationIndex(x) {
     }
     return idx < 3 ? (idx + 2) : (idx + 3);
   }
+  /* istanbul ignore next */
   if (Array.isArray(x)) {
     return 5;
   }
@@ -2381,12 +2439,13 @@ function numToIndexableString(num) {
   // first sort by magnitude
   // it's easier if all magnitudes are positive
   var magForComparison = ((neg ? -magnitude : magnitude) - MIN_MAGNITUDE);
-  var magString = utils.padLeft((magForComparison).toString(), '0', MAGNITUDE_DIGITS);
+  var magString = padLeft((magForComparison).toString(), '0', MAGNITUDE_DIGITS);
 
   result += SEP + magString;
 
   // then sort by the factor
   var factor = Math.abs(parseFloat(expFormat[0])); // [1..10)
+  /* istanbul ignore next */
   if (neg) { // for negative reverse ordering
     factor = 10 - factor;
   }
@@ -2401,78 +2460,112 @@ function numToIndexableString(num) {
   return result;
 }
 
-},{"15":15}],15:[function(require,module,exports){
+exports.collate = collate;
+exports.normalizeKey = normalizeKey;
+exports.toIndexableString = toIndexableString;
+exports.parseIndexableString = parseIndexableString;
+
+},{}],14:[function(require,module,exports){
 'use strict';
 
-function pad(str, padWith, upToLength) {
-  var padding = '';
-  var targetLength = upToLength - str.length;
-  while (padding.length < targetLength) {
-    padding += padWith;
+Object.defineProperty(exports, '__esModule', { value: true });
+
+function mangle(key) {
+  return '$' + key;
+}
+function unmangle(key) {
+  return key.substring(1);
+}
+function Map$1() {
+  this._store = {};
+}
+Map$1.prototype.get = function (key) {
+  var mangled = mangle(key);
+  return this._store[mangled];
+};
+Map$1.prototype.set = function (key, value) {
+  var mangled = mangle(key);
+  this._store[mangled] = value;
+  return true;
+};
+Map$1.prototype.has = function (key) {
+  var mangled = mangle(key);
+  return mangled in this._store;
+};
+Map$1.prototype.delete = function (key) {
+  var mangled = mangle(key);
+  var res = mangled in this._store;
+  delete this._store[mangled];
+  return res;
+};
+Map$1.prototype.forEach = function (cb) {
+  var keys = Object.keys(this._store);
+  for (var i = 0, len = keys.length; i < len; i++) {
+    var key = keys[i];
+    var value = this._store[key];
+    key = unmangle(key);
+    cb(value, key);
   }
-  return padding;
+};
+Object.defineProperty(Map$1.prototype, 'size', {
+  get: function () {
+    return Object.keys(this._store).length;
+  }
+});
+
+function Set$1(array) {
+  this._store = new Map$1();
+
+  // init with an array
+  if (array && Array.isArray(array)) {
+    for (var i = 0, len = array.length; i < len; i++) {
+      this.add(array[i]);
+    }
+  }
+}
+Set$1.prototype.add = function (key) {
+  return this._store.set(key, true);
+};
+Set$1.prototype.has = function (key) {
+  return this._store.has(key);
+};
+Set$1.prototype.forEach = function (cb) {
+  this._store.forEach(function (value, key) {
+    cb(key);
+  });
+};
+Object.defineProperty(Set$1.prototype, 'size', {
+  get: function () {
+    return this._store.size;
+  }
+});
+
+/* global Map,Set,Symbol */
+// Based on https://kangax.github.io/compat-table/es6/ we can sniff out
+// incomplete Map/Set implementations which would otherwise cause our tests to fail.
+// Notably they fail in IE11 and iOS 8.4, which this prevents.
+function supportsMapAndSet() {
+  if (typeof Symbol === 'undefined' || typeof Map === 'undefined' || typeof Set === 'undefined') {
+    return false;
+  }
+  var prop = Object.getOwnPropertyDescriptor(Map, Symbol.species);
+  return prop && 'get' in prop && Map[Symbol.species] === Map;
 }
 
-exports.padLeft = function (str, padWith, upToLength) {
-  var padding = pad(str, padWith, upToLength);
-  return padding + str;
-};
+// based on https://github.com/montagejs/collections
+/* global Map,Set */
 
-exports.padRight = function (str, padWith, upToLength) {
-  var padding = pad(str, padWith, upToLength);
-  return str + padding;
-};
-
-exports.stringLexCompare = function (a, b) {
-
-  var aLen = a.length;
-  var bLen = b.length;
-
-  var i;
-  for (i = 0; i < aLen; i++) {
-    if (i === bLen) {
-      // b is shorter substring of a
-      return 1;
-    }
-    var aChar = a.charAt(i);
-    var bChar = b.charAt(i);
-    if (aChar !== bChar) {
-      return aChar < bChar ? -1 : 1;
-    }
+{
+  if (supportsMapAndSet()) { // prefer built-in Map/Set
+    exports.Set = Set;
+    exports.Map = Map;
+  } else { // fall back to our polyfill
+    exports.Set = Set$1;
+    exports.Map = Map$1;
   }
+}
 
-  if (aLen < bLen) {
-    // a is shorter substring of b
-    return -1;
-  }
-
-  return 0;
-};
-
-/*
- * returns the decimal form for the given integer, i.e. writes
- * out all the digits (in base-10) instead of using scientific notation
- */
-exports.intToDecimalForm = function (int) {
-
-  var isNeg = int < 0;
-  var result = '';
-
-  do {
-    var remainder = isNeg ? -Math.ceil(int % 10) : Math.floor(int % 10);
-
-    result = remainder + result;
-    int = isNeg ? Math.ceil(int / 10) : Math.floor(int / 10);
-  } while (int);
-
-
-  if (isNeg && result !== '0') {
-    result = '-' + result;
-  }
-
-  return result;
-};
-},{}],16:[function(require,module,exports){
+},{}],15:[function(require,module,exports){
 'use strict';
 
 Object.defineProperty(exports, '__esModule', { value: true });
@@ -2483,11 +2576,11 @@ var inherits = _interopDefault(require(7));
 
 inherits(PouchError, Error);
 
-function PouchError(opts) {
-  Error.call(this, opts.reason);
-  this.status = opts.status;
-  this.name = opts.error;
-  this.message = opts.reason;
+function PouchError(status, error, reason) {
+  Error.call(this, reason);
+  this.status = status;
+  this.name = error;
+  this.message = reason;
   this.error = true;
 }
 
@@ -2500,148 +2593,30 @@ PouchError.prototype.toString = function () {
   });
 };
 
-var UNAUTHORIZED = new PouchError({
-  status: 401,
-  error: 'unauthorized',
-  reason: "Name or password is incorrect."
-});
-
-var MISSING_BULK_DOCS = new PouchError({
-  status: 400,
-  error: 'bad_request',
-  reason: "Missing JSON list of 'docs'"
-});
-
-var MISSING_DOC = new PouchError({
-  status: 404,
-  error: 'not_found',
-  reason: 'missing'
-});
-
-var REV_CONFLICT = new PouchError({
-  status: 409,
-  error: 'conflict',
-  reason: 'Document update conflict'
-});
-
-var INVALID_ID = new PouchError({
-  status: 400,
-  error: 'bad_request',
-  reason: '_id field must contain a string'
-});
-
-var MISSING_ID = new PouchError({
-  status: 412,
-  error: 'missing_id',
-  reason: '_id is required for puts'
-});
-
-var RESERVED_ID = new PouchError({
-  status: 400,
-  error: 'bad_request',
-  reason: 'Only reserved document ids may start with underscore.'
-});
-
-var NOT_OPEN = new PouchError({
-  status: 412,
-  error: 'precondition_failed',
-  reason: 'Database not open'
-});
-
-var UNKNOWN_ERROR = new PouchError({
-  status: 500,
-  error: 'unknown_error',
-  reason: 'Database encountered an unknown error'
-});
-
-var BAD_ARG = new PouchError({
-  status: 500,
-  error: 'badarg',
-  reason: 'Some query argument is invalid'
-});
-
-var INVALID_REQUEST = new PouchError({
-  status: 400,
-  error: 'invalid_request',
-  reason: 'Request was invalid'
-});
-
-var QUERY_PARSE_ERROR = new PouchError({
-  status: 400,
-  error: 'query_parse_error',
-  reason: 'Some query parameter is invalid'
-});
-
-var DOC_VALIDATION = new PouchError({
-  status: 500,
-  error: 'doc_validation',
-  reason: 'Bad special document member'
-});
-
-var BAD_REQUEST = new PouchError({
-  status: 400,
-  error: 'bad_request',
-  reason: 'Something wrong with the request'
-});
-
-var NOT_AN_OBJECT = new PouchError({
-  status: 400,
-  error: 'bad_request',
-  reason: 'Document must be a JSON object'
-});
-
-var DB_MISSING = new PouchError({
-  status: 404,
-  error: 'not_found',
-  reason: 'Database not found'
-});
-
-var IDB_ERROR = new PouchError({
-  status: 500,
-  error: 'indexed_db_went_bad',
-  reason: 'unknown'
-});
-
-var WSQ_ERROR = new PouchError({
-  status: 500,
-  error: 'web_sql_went_bad',
-  reason: 'unknown'
-});
-
-var LDB_ERROR = new PouchError({
-  status: 500,
-  error: 'levelDB_went_went_bad',
-  reason: 'unknown'
-});
-
-var FORBIDDEN = new PouchError({
-  status: 403,
-  error: 'forbidden',
-  reason: 'Forbidden by design doc validate_doc_update function'
-});
-
-var INVALID_REV = new PouchError({
-  status: 400,
-  error: 'bad_request',
-  reason: 'Invalid rev format'
-});
-
-var FILE_EXISTS = new PouchError({
-  status: 412,
-  error: 'file_exists',
-  reason: 'The database could not be created, the file already exists.'
-});
-
-var MISSING_STUB = new PouchError({
-  status: 412,
-  error: 'missing_stub'
-});
-
-var INVALID_URL = new PouchError({
-  status: 413,
-  error: 'invalid_url',
-  reason: 'Provided URL is invalid'
-});
+var UNAUTHORIZED = new PouchError(401, 'unauthorized', "Name or password is incorrect.");
+var MISSING_BULK_DOCS = new PouchError(400, 'bad_request', "Missing JSON list of 'docs'");
+var MISSING_DOC = new PouchError(404, 'not_found', 'missing');
+var REV_CONFLICT = new PouchError(409, 'conflict', 'Document update conflict');
+var INVALID_ID = new PouchError(400, 'bad_request', '_id field must contain a string');
+var MISSING_ID = new PouchError(412, 'missing_id', '_id is required for puts');
+var RESERVED_ID = new PouchError(400, 'bad_request', 'Only reserved document ids may start with underscore.');
+var NOT_OPEN = new PouchError(412, 'precondition_failed', 'Database not open');
+var UNKNOWN_ERROR = new PouchError(500, 'unknown_error', 'Database encountered an unknown error');
+var BAD_ARG = new PouchError(500, 'badarg', 'Some query argument is invalid');
+var INVALID_REQUEST = new PouchError(400, 'invalid_request', 'Request was invalid');
+var QUERY_PARSE_ERROR = new PouchError(400, 'query_parse_error', 'Some query parameter is invalid');
+var DOC_VALIDATION = new PouchError(500, 'doc_validation', 'Bad special document member');
+var BAD_REQUEST = new PouchError(400, 'bad_request', 'Something wrong with the request');
+var NOT_AN_OBJECT = new PouchError(400, 'bad_request', 'Document must be a JSON object');
+var DB_MISSING = new PouchError(404, 'not_found', 'Database not found');
+var IDB_ERROR = new PouchError(500, 'indexed_db_went_bad', 'unknown');
+var WSQ_ERROR = new PouchError(500, 'web_sql_went_bad', 'unknown');
+var LDB_ERROR = new PouchError(500, 'levelDB_went_went_bad', 'unknown');
+var FORBIDDEN = new PouchError(403, 'forbidden', 'Forbidden by design doc validate_doc_update function');
+var INVALID_REV = new PouchError(400, 'bad_request', 'Invalid rev format');
+var FILE_EXISTS = new PouchError(412, 'file_exists', 'The database could not be created, the file already exists.');
+var MISSING_STUB = new PouchError(412, 'missing_stub', 'A pre-existing attachment stub wasn\'t found');
+var INVALID_URL = new PouchError(413, 'invalid_url', 'Provided URL is invalid');
 
 function createError(error, reason) {
   function CustomPouchError(reason) {
@@ -2716,7 +2691,8 @@ exports.IDB_ERROR = IDB_ERROR;
 exports.INVALID_URL = INVALID_URL;
 exports.createError = createError;
 exports.generateErrorFromResponse = generateErrorFromResponse;
-},{"7":7}],17:[function(require,module,exports){
+
+},{"7":7}],16:[function(require,module,exports){
 "use strict";
 
 // Extends method
@@ -2897,14 +2873,14 @@ module.exports = extend;
 
 
 
-},{}],18:[function(require,module,exports){
+},{}],17:[function(require,module,exports){
 'use strict';
 
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
-var Promise = _interopDefault(require(20));
-var pouchdbMd5 = require(19);
-var pouchdbCollate = require(14);
+var Promise = _interopDefault(require(19));
+var pouchdbMd5 = require(18);
+var pouchdbCollate = require(13);
 
 function sortObjectPropertiesByKey(queryParams) {
   return Object.keys(queryParams).sort(pouchdbCollate.collate).reduce(function (result, key) {
@@ -2945,7 +2921,8 @@ function generateReplicationId(src, target, opts) {
 }
 
 module.exports = generateReplicationId;
-},{"14":14,"19":19,"20":20}],19:[function(require,module,exports){
+
+},{"13":13,"18":18,"19":19}],18:[function(require,module,exports){
 (function (global){
 'use strict';
 
@@ -2953,8 +2930,8 @@ Object.defineProperty(exports, '__esModule', { value: true });
 
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
-var pouchdbBinaryUtils = require(12);
-var Md5 = _interopDefault(require(23));
+var pouchdbBinaryUtils = require(11);
+var Md5 = _interopDefault(require(22));
 
 var setImmediateShim = global.setImmediate || global.setTimeout;
 var MD5_CHUNK_SIZE = 32768;
@@ -3030,35 +3007,39 @@ function stringMd5(string) {
 
 exports.binaryMd5 = binaryMd5;
 exports.stringMd5 = stringMd5;
+
 }).call(this,typeof global !== "undefined" ? global : typeof self !== "undefined" ? self : typeof window !== "undefined" ? window : {})
-},{"12":12,"23":23}],20:[function(require,module,exports){
+},{"11":11,"22":22}],19:[function(require,module,exports){
 'use strict';
 
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
-var lie = _interopDefault(require(9));
+var lie = _interopDefault(require(8));
 
 /* istanbul ignore next */
 var PouchPromise = typeof Promise === 'function' ? Promise : lie;
 
 module.exports = PouchPromise;
-},{"9":9}],21:[function(require,module,exports){
-(function (process){
+
+},{"8":8}],20:[function(require,module,exports){
 'use strict';
 
 Object.defineProperty(exports, '__esModule', { value: true });
 
 function _interopDefault (ex) { return (ex && (typeof ex === 'object') && 'default' in ex) ? ex['default'] : ex; }
 
-var Promise = _interopDefault(require(20));
+var Promise = _interopDefault(require(19));
 var getArguments = _interopDefault(require(2));
 var debug = _interopDefault(require(3));
+var pouchdbCollections = require(14);
 var events = require(5);
 var inherits = _interopDefault(require(7));
-var pouchdbErrors = require(16);
+var pouchdbUtils = require(20);
+var pouchdbErrors = require(15);
+var immediate = _interopDefault(require(6));
 
 function isBinaryObject(object) {
-  return object instanceof ArrayBuffer ||
+  return (typeof ArrayBuffer !== 'undefined' && object instanceof ArrayBuffer) ||
     (typeof Blob !== 'undefined' && object instanceof Blob);
 }
 
@@ -3139,6 +3120,7 @@ function clone(object) {
 
   newObject = {};
   for (i in object) {
+    /* istanbul ignore else */
     if (Object.prototype.hasOwnProperty.call(object, i)) {
       var value = clone(object[i]);
       if (typeof value !== 'undefined') {
@@ -3169,19 +3151,8 @@ function toPromise(func) {
     // Clone arguments
     args = clone(args);
     var self = this;
-    var tempCB =
-      (typeof args[args.length - 1] === 'function') ? args.pop() : false;
     // if the last argument is a function, assume its a callback
-    var usedCB;
-    if (tempCB) {
-      // if it was a callback, create a new callback which calls it,
-      // but do so async so we don't trap any errors
-      usedCB = function (err, resp) {
-        process.nextTick(function () {
-          tempCB(err, resp);
-        });
-      };
-    }
+    var usedCB = (typeof args[args.length - 1] === 'function') ? args.pop() : false;
     var promise = new Promise(function (fulfill, reject) {
       var resp;
       try {
@@ -3219,7 +3190,7 @@ function adapterFun(name, callback) {
   function logApiCall(self, name, args) {
     /* istanbul ignore if */
     if (log.enabled) {
-      var logArgs = [self._db_name, name];
+      var logArgs = [self.name, name];
       for (var i = 0; i < args.length - 1; i++) {
         logArgs.push(args[i]);
       }
@@ -3228,7 +3199,7 @@ function adapterFun(name, callback) {
       // override the callback itself to log the response
       var origCallback = args[args.length - 1];
       args[args.length - 1] = function (err, res) {
-        var responseArgs = [self._db_name, name];
+        var responseArgs = [self.name, name];
         responseArgs = responseArgs.concat(
           err ? ['error', err] : ['success', res]
         );
@@ -3294,16 +3265,16 @@ function bulkGet(db, opts, callback) {
   var requests = opts.docs;
 
   // consolidate into one request per doc if possible
-  var requestsById = {};
+  var requestsById = new pouchdbCollections.Map();
   requests.forEach(function (request) {
-    if (request.id in requestsById) {
-      requestsById[request.id].push(request);
+    if (requestsById.has(request.id)) {
+      requestsById.get(request.id).push(request);
     } else {
-      requestsById[request.id] = [request];
+      requestsById.set(request.id, [request]);
     }
   });
 
-  var numDocs = Object.keys(requestsById).length;
+  var numDocs = requestsById.size;
   var numDone = 0;
   var perDocResults = new Array(numDocs);
 
@@ -3331,7 +3302,10 @@ function bulkGet(db, opts, callback) {
     checkDone();
   }
 
-  var allRequests = Object.keys(requestsById);
+  var allRequests = [];
+  requestsById.forEach(function (value, key) {
+    allRequests.push(key);
+  });
 
   var i = 0;
 
@@ -3350,7 +3324,7 @@ function bulkGet(db, opts, callback) {
   function processBatch(batch, offset) {
     batch.forEach(function (docId, j) {
       var docIdx = offset + j;
-      var docRequests = requestsById[docId];
+      var docRequests = requestsById.get(docId);
 
       // just use the first request as the "template"
       // TODO: The _bulk_get API allows for more subtle use cases than this,
@@ -3379,7 +3353,7 @@ function bulkGet(db, opts, callback) {
       }
 
       // globally-supplied options
-      ['revs', 'attachments', 'binary', 'ajax'].forEach(function (param) {
+      ['revs', 'attachments', 'binary', 'ajax', 'latest'].forEach(function (param) {
         if (param in opts) {
           docOpts[param] = opts[param];
         }
@@ -3490,9 +3464,7 @@ Changes.prototype.addListener = function (dbName, id, db, opts) {
       }
     }).on('complete', function () {
       if (inprogress === 'waiting') {
-        setTimeout(function (){
-          eventFunction();
-        },0);
+        pouchdbUtils.nextTick(eventFunction);
       }
       inprogress = false;
     }).on('error', onError);
@@ -3508,6 +3480,7 @@ Changes.prototype.removeListener = function (dbName, id) {
   }
   events.EventEmitter.prototype.removeListener.call(this, dbName,
     this._listeners[id]);
+  delete this._listeners[id];
 };
 
 
@@ -3528,6 +3501,7 @@ Changes.prototype.notify = function (dbName) {
 };
 
 function guardedConsole(method) {
+  /* istanbul ignore else */
   if (console !== 'undefined' && method in console) {
     var args = Array.prototype.slice.call(arguments, 1);
     console[method].apply(console, args);
@@ -3568,24 +3542,34 @@ function explainError(status, str) {
   guardedConsole('info', 'The above ' + status + ' is totally normal. ' + str);
 }
 
-function extendInner(obj, otherObj) {
-  for (var key in otherObj) {
-    if (otherObj.hasOwnProperty(key)) {
-      var value = clone(otherObj[key]);
-      if (typeof value !== 'undefined') {
-        obj[key] = value;
+var assign;
+{
+  if (typeof Object.assign === 'function') {
+    assign = Object.assign;
+  } else {
+    // lite Object.assign polyfill based on
+    // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/assign
+    assign = function (target) {
+      var to = Object(target);
+
+      for (var index = 1; index < arguments.length; index++) {
+        var nextSource = arguments[index];
+
+        if (nextSource != null) { // Skip over if undefined or null
+          for (var nextKey in nextSource) {
+            // Avoid bugs when hasOwnProperty is shadowed
+            if (Object.prototype.hasOwnProperty.call(nextSource, nextKey)) {
+              to[nextKey] = nextSource[nextKey];
+            }
+          }
+        }
       }
-    }
+      return to;
+    };
   }
 }
 
-function extend(obj, obj2, obj3) {
-  extendInner(obj, obj2);
-  if (obj3) {
-    extendInner(obj, obj3);
-  }
-  return obj;
-}
+var assign$1 = assign;
 
 function tryFilter(filter, doc, req) {
   try {
@@ -3661,7 +3645,7 @@ if (hasName) {
   };
 }
 
-var functionName = res;
+var res$1 = res;
 
 // Determine id an ID is valid
 //   - invalid IDs begin with an underescore that does not begin '_design' or
@@ -3692,6 +3676,18 @@ function listenerCount(ee, type) {
   return 'listenerCount' in ee ? ee.listenerCount(type) :
                                  events.EventEmitter.listenerCount(ee, type);
 }
+
+// Custom nextTick() shim for browsers. In node, this will just be process.nextTick(). We
+// avoid using process.nextTick() directly because the polyfill is very large and we don't
+// need all of it (see: https://github.com/defunctzombie/node-process).
+// "immediate" 3.0.8 is used by lie, and it's a smaller version of the latest "immediate"
+// package, so it's the one we use.
+// When we use nextTick() in our codebase, we only care about not releasing Zalgo
+// (see: http://blog.izs.me/post/59142742143/designing-apis-for-asynchrony).
+// Microtask vs macrotask doesn't matter to us. So we're free to use the fastest
+// (least latency) option, which is "immediate" due to use of microtasks.
+// All of our nextTicks are isolated to this one function so we can easily swap out one
+// implementation for another.
 
 function parseDesignDocFunctionName(s) {
   if (!s) {
@@ -3877,16 +3873,17 @@ exports.changesHandler = Changes;
 exports.clone = clone;
 exports.defaultBackOff = defaultBackOff;
 exports.explainError = explainError;
-exports.extend = extend;
+exports.assign = assign$1;
 exports.filterChange = filterChange;
 exports.flatten = flatten;
-exports.functionName = functionName;
+exports.functionName = res$1;
 exports.guardedConsole = guardedConsole;
 exports.hasLocalStorage = hasLocalStorage;
 exports.invalidIdError = invalidIdError;
 exports.isChromeApp = isChromeApp;
 exports.isCordova = isCordova;
 exports.listenerCount = listenerCount;
+exports.nextTick = immediate;
 exports.normalizeDdocFunctionName = normalizeDesignDocFunctionName;
 exports.once = once;
 exports.parseDdocFunctionName = parseDesignDocFunctionName;
@@ -3895,10 +3892,9 @@ exports.pick = pick;
 exports.toPromise = toPromise;
 exports.upsert = upsert;
 exports.uuid = uuid;
-}).call(this,require(22))
-},{"16":16,"2":2,"20":20,"22":22,"3":3,"5":5,"7":7}],22:[function(require,module,exports){
-// shim for using process in browser
 
+},{"14":14,"15":15,"19":19,"2":2,"20":20,"3":3,"5":5,"6":6,"7":7}],21:[function(require,module,exports){
+// shim for using process in browser
 var process = module.exports = {};
 
 // cached from whatever global is present so that test runners that stub it
@@ -3909,22 +3905,84 @@ var process = module.exports = {};
 var cachedSetTimeout;
 var cachedClearTimeout;
 
+function defaultSetTimout() {
+    throw new Error('setTimeout has not been defined');
+}
+function defaultClearTimeout () {
+    throw new Error('clearTimeout has not been defined');
+}
 (function () {
-  try {
-    cachedSetTimeout = setTimeout;
-  } catch (e) {
-    cachedSetTimeout = function () {
-      throw new Error('setTimeout is not defined');
+    try {
+        if (typeof setTimeout === 'function') {
+            cachedSetTimeout = setTimeout;
+        } else {
+            cachedSetTimeout = defaultSetTimout;
+        }
+    } catch (e) {
+        cachedSetTimeout = defaultSetTimout;
     }
-  }
-  try {
-    cachedClearTimeout = clearTimeout;
-  } catch (e) {
-    cachedClearTimeout = function () {
-      throw new Error('clearTimeout is not defined');
+    try {
+        if (typeof clearTimeout === 'function') {
+            cachedClearTimeout = clearTimeout;
+        } else {
+            cachedClearTimeout = defaultClearTimeout;
+        }
+    } catch (e) {
+        cachedClearTimeout = defaultClearTimeout;
     }
-  }
 } ())
+function runTimeout(fun) {
+    if (cachedSetTimeout === setTimeout) {
+        //normal enviroments in sane situations
+        return setTimeout(fun, 0);
+    }
+    // if setTimeout wasn't available but was latter defined
+    if ((cachedSetTimeout === defaultSetTimout || !cachedSetTimeout) && setTimeout) {
+        cachedSetTimeout = setTimeout;
+        return setTimeout(fun, 0);
+    }
+    try {
+        // when when somebody has screwed with setTimeout but no I.E. maddness
+        return cachedSetTimeout(fun, 0);
+    } catch(e){
+        try {
+            // When we are in I.E. but the script has been evaled so I.E. doesn't trust the global object when called normally
+            return cachedSetTimeout.call(null, fun, 0);
+        } catch(e){
+            // same as above but when it's a version of I.E. that must have the global object for 'this', hopfully our context correct otherwise it will throw a global error
+            return cachedSetTimeout.call(this, fun, 0);
+        }
+    }
+
+
+}
+function runClearTimeout(marker) {
+    if (cachedClearTimeout === clearTimeout) {
+        //normal enviroments in sane situations
+        return clearTimeout(marker);
+    }
+    // if clearTimeout wasn't available but was latter defined
+    if ((cachedClearTimeout === defaultClearTimeout || !cachedClearTimeout) && clearTimeout) {
+        cachedClearTimeout = clearTimeout;
+        return clearTimeout(marker);
+    }
+    try {
+        // when when somebody has screwed with setTimeout but no I.E. maddness
+        return cachedClearTimeout(marker);
+    } catch (e){
+        try {
+            // When we are in I.E. but the script has been evaled so I.E. doesn't  trust the global object when called normally
+            return cachedClearTimeout.call(null, marker);
+        } catch (e){
+            // same as above but when it's a version of I.E. that must have the global object for 'this', hopfully our context correct otherwise it will throw a global error.
+            // Some versions of I.E. have different rules for clearTimeout vs setTimeout
+            return cachedClearTimeout.call(this, marker);
+        }
+    }
+
+
+
+}
 var queue = [];
 var draining = false;
 var currentQueue;
@@ -3949,7 +4007,7 @@ function drainQueue() {
     if (draining) {
         return;
     }
-    var timeout = cachedSetTimeout(cleanUpNextTick);
+    var timeout = runTimeout(cleanUpNextTick);
     draining = true;
 
     var len = queue.length;
@@ -3966,7 +4024,7 @@ function drainQueue() {
     }
     currentQueue = null;
     draining = false;
-    cachedClearTimeout(timeout);
+    runClearTimeout(timeout);
 }
 
 process.nextTick = function (fun) {
@@ -3978,7 +4036,7 @@ process.nextTick = function (fun) {
     }
     queue.push(new Item(fun, args));
     if (queue.length === 1 && !draining) {
-        cachedSetTimeout(drainQueue, 0);
+        runTimeout(drainQueue);
     }
 };
 
@@ -4006,6 +4064,10 @@ process.off = noop;
 process.removeListener = noop;
 process.removeAllListeners = noop;
 process.emit = noop;
+process.prependListener = noop;
+process.prependOnceListener = noop;
+
+process.listeners = function (name) { return [] }
 
 process.binding = function (name) {
     throw new Error('process.binding is not supported');
@@ -4017,7 +4079,7 @@ process.chdir = function (dir) {
 };
 process.umask = function() { return 0; };
 
-},{}],23:[function(require,module,exports){
+},{}],22:[function(require,module,exports){
 (function (factory) {
     if (typeof exports === 'object') {
         // Node/CommonJS
@@ -4065,100 +4127,148 @@ process.umask = function() { return 0; };
         return add32((a << s) | (a >>> (32 - s)), b);
     }
 
-    function ff(a, b, c, d, x, s, t) {
-        return cmn((b & c) | ((~b) & d), a, b, x, s, t);
-    }
-
-    function gg(a, b, c, d, x, s, t) {
-        return cmn((b & d) | (c & (~d)), a, b, x, s, t);
-    }
-
-    function hh(a, b, c, d, x, s, t) {
-        return cmn(b ^ c ^ d, a, b, x, s, t);
-    }
-
-    function ii(a, b, c, d, x, s, t) {
-        return cmn(c ^ (b | (~d)), a, b, x, s, t);
-    }
-
     function md5cycle(x, k) {
         var a = x[0],
             b = x[1],
             c = x[2],
             d = x[3];
 
-        a = ff(a, b, c, d, k[0], 7, -680876936);
-        d = ff(d, a, b, c, k[1], 12, -389564586);
-        c = ff(c, d, a, b, k[2], 17, 606105819);
-        b = ff(b, c, d, a, k[3], 22, -1044525330);
-        a = ff(a, b, c, d, k[4], 7, -176418897);
-        d = ff(d, a, b, c, k[5], 12, 1200080426);
-        c = ff(c, d, a, b, k[6], 17, -1473231341);
-        b = ff(b, c, d, a, k[7], 22, -45705983);
-        a = ff(a, b, c, d, k[8], 7, 1770035416);
-        d = ff(d, a, b, c, k[9], 12, -1958414417);
-        c = ff(c, d, a, b, k[10], 17, -42063);
-        b = ff(b, c, d, a, k[11], 22, -1990404162);
-        a = ff(a, b, c, d, k[12], 7, 1804603682);
-        d = ff(d, a, b, c, k[13], 12, -40341101);
-        c = ff(c, d, a, b, k[14], 17, -1502002290);
-        b = ff(b, c, d, a, k[15], 22, 1236535329);
+        a += (b & c | ~b & d) + k[0] - 680876936 | 0;
+        a  = (a << 7 | a >>> 25) + b | 0;
+        d += (a & b | ~a & c) + k[1] - 389564586 | 0;
+        d  = (d << 12 | d >>> 20) + a | 0;
+        c += (d & a | ~d & b) + k[2] + 606105819 | 0;
+        c  = (c << 17 | c >>> 15) + d | 0;
+        b += (c & d | ~c & a) + k[3] - 1044525330 | 0;
+        b  = (b << 22 | b >>> 10) + c | 0;
+        a += (b & c | ~b & d) + k[4] - 176418897 | 0;
+        a  = (a << 7 | a >>> 25) + b | 0;
+        d += (a & b | ~a & c) + k[5] + 1200080426 | 0;
+        d  = (d << 12 | d >>> 20) + a | 0;
+        c += (d & a | ~d & b) + k[6] - 1473231341 | 0;
+        c  = (c << 17 | c >>> 15) + d | 0;
+        b += (c & d | ~c & a) + k[7] - 45705983 | 0;
+        b  = (b << 22 | b >>> 10) + c | 0;
+        a += (b & c | ~b & d) + k[8] + 1770035416 | 0;
+        a  = (a << 7 | a >>> 25) + b | 0;
+        d += (a & b | ~a & c) + k[9] - 1958414417 | 0;
+        d  = (d << 12 | d >>> 20) + a | 0;
+        c += (d & a | ~d & b) + k[10] - 42063 | 0;
+        c  = (c << 17 | c >>> 15) + d | 0;
+        b += (c & d | ~c & a) + k[11] - 1990404162 | 0;
+        b  = (b << 22 | b >>> 10) + c | 0;
+        a += (b & c | ~b & d) + k[12] + 1804603682 | 0;
+        a  = (a << 7 | a >>> 25) + b | 0;
+        d += (a & b | ~a & c) + k[13] - 40341101 | 0;
+        d  = (d << 12 | d >>> 20) + a | 0;
+        c += (d & a | ~d & b) + k[14] - 1502002290 | 0;
+        c  = (c << 17 | c >>> 15) + d | 0;
+        b += (c & d | ~c & a) + k[15] + 1236535329 | 0;
+        b  = (b << 22 | b >>> 10) + c | 0;
 
-        a = gg(a, b, c, d, k[1], 5, -165796510);
-        d = gg(d, a, b, c, k[6], 9, -1069501632);
-        c = gg(c, d, a, b, k[11], 14, 643717713);
-        b = gg(b, c, d, a, k[0], 20, -373897302);
-        a = gg(a, b, c, d, k[5], 5, -701558691);
-        d = gg(d, a, b, c, k[10], 9, 38016083);
-        c = gg(c, d, a, b, k[15], 14, -660478335);
-        b = gg(b, c, d, a, k[4], 20, -405537848);
-        a = gg(a, b, c, d, k[9], 5, 568446438);
-        d = gg(d, a, b, c, k[14], 9, -1019803690);
-        c = gg(c, d, a, b, k[3], 14, -187363961);
-        b = gg(b, c, d, a, k[8], 20, 1163531501);
-        a = gg(a, b, c, d, k[13], 5, -1444681467);
-        d = gg(d, a, b, c, k[2], 9, -51403784);
-        c = gg(c, d, a, b, k[7], 14, 1735328473);
-        b = gg(b, c, d, a, k[12], 20, -1926607734);
+        a += (b & d | c & ~d) + k[1] - 165796510 | 0;
+        a  = (a << 5 | a >>> 27) + b | 0;
+        d += (a & c | b & ~c) + k[6] - 1069501632 | 0;
+        d  = (d << 9 | d >>> 23) + a | 0;
+        c += (d & b | a & ~b) + k[11] + 643717713 | 0;
+        c  = (c << 14 | c >>> 18) + d | 0;
+        b += (c & a | d & ~a) + k[0] - 373897302 | 0;
+        b  = (b << 20 | b >>> 12) + c | 0;
+        a += (b & d | c & ~d) + k[5] - 701558691 | 0;
+        a  = (a << 5 | a >>> 27) + b | 0;
+        d += (a & c | b & ~c) + k[10] + 38016083 | 0;
+        d  = (d << 9 | d >>> 23) + a | 0;
+        c += (d & b | a & ~b) + k[15] - 660478335 | 0;
+        c  = (c << 14 | c >>> 18) + d | 0;
+        b += (c & a | d & ~a) + k[4] - 405537848 | 0;
+        b  = (b << 20 | b >>> 12) + c | 0;
+        a += (b & d | c & ~d) + k[9] + 568446438 | 0;
+        a  = (a << 5 | a >>> 27) + b | 0;
+        d += (a & c | b & ~c) + k[14] - 1019803690 | 0;
+        d  = (d << 9 | d >>> 23) + a | 0;
+        c += (d & b | a & ~b) + k[3] - 187363961 | 0;
+        c  = (c << 14 | c >>> 18) + d | 0;
+        b += (c & a | d & ~a) + k[8] + 1163531501 | 0;
+        b  = (b << 20 | b >>> 12) + c | 0;
+        a += (b & d | c & ~d) + k[13] - 1444681467 | 0;
+        a  = (a << 5 | a >>> 27) + b | 0;
+        d += (a & c | b & ~c) + k[2] - 51403784 | 0;
+        d  = (d << 9 | d >>> 23) + a | 0;
+        c += (d & b | a & ~b) + k[7] + 1735328473 | 0;
+        c  = (c << 14 | c >>> 18) + d | 0;
+        b += (c & a | d & ~a) + k[12] - 1926607734 | 0;
+        b  = (b << 20 | b >>> 12) + c | 0;
 
-        a = hh(a, b, c, d, k[5], 4, -378558);
-        d = hh(d, a, b, c, k[8], 11, -2022574463);
-        c = hh(c, d, a, b, k[11], 16, 1839030562);
-        b = hh(b, c, d, a, k[14], 23, -35309556);
-        a = hh(a, b, c, d, k[1], 4, -1530992060);
-        d = hh(d, a, b, c, k[4], 11, 1272893353);
-        c = hh(c, d, a, b, k[7], 16, -155497632);
-        b = hh(b, c, d, a, k[10], 23, -1094730640);
-        a = hh(a, b, c, d, k[13], 4, 681279174);
-        d = hh(d, a, b, c, k[0], 11, -358537222);
-        c = hh(c, d, a, b, k[3], 16, -722521979);
-        b = hh(b, c, d, a, k[6], 23, 76029189);
-        a = hh(a, b, c, d, k[9], 4, -640364487);
-        d = hh(d, a, b, c, k[12], 11, -421815835);
-        c = hh(c, d, a, b, k[15], 16, 530742520);
-        b = hh(b, c, d, a, k[2], 23, -995338651);
+        a += (b ^ c ^ d) + k[5] - 378558 | 0;
+        a  = (a << 4 | a >>> 28) + b | 0;
+        d += (a ^ b ^ c) + k[8] - 2022574463 | 0;
+        d  = (d << 11 | d >>> 21) + a | 0;
+        c += (d ^ a ^ b) + k[11] + 1839030562 | 0;
+        c  = (c << 16 | c >>> 16) + d | 0;
+        b += (c ^ d ^ a) + k[14] - 35309556 | 0;
+        b  = (b << 23 | b >>> 9) + c | 0;
+        a += (b ^ c ^ d) + k[1] - 1530992060 | 0;
+        a  = (a << 4 | a >>> 28) + b | 0;
+        d += (a ^ b ^ c) + k[4] + 1272893353 | 0;
+        d  = (d << 11 | d >>> 21) + a | 0;
+        c += (d ^ a ^ b) + k[7] - 155497632 | 0;
+        c  = (c << 16 | c >>> 16) + d | 0;
+        b += (c ^ d ^ a) + k[10] - 1094730640 | 0;
+        b  = (b << 23 | b >>> 9) + c | 0;
+        a += (b ^ c ^ d) + k[13] + 681279174 | 0;
+        a  = (a << 4 | a >>> 28) + b | 0;
+        d += (a ^ b ^ c) + k[0] - 358537222 | 0;
+        d  = (d << 11 | d >>> 21) + a | 0;
+        c += (d ^ a ^ b) + k[3] - 722521979 | 0;
+        c  = (c << 16 | c >>> 16) + d | 0;
+        b += (c ^ d ^ a) + k[6] + 76029189 | 0;
+        b  = (b << 23 | b >>> 9) + c | 0;
+        a += (b ^ c ^ d) + k[9] - 640364487 | 0;
+        a  = (a << 4 | a >>> 28) + b | 0;
+        d += (a ^ b ^ c) + k[12] - 421815835 | 0;
+        d  = (d << 11 | d >>> 21) + a | 0;
+        c += (d ^ a ^ b) + k[15] + 530742520 | 0;
+        c  = (c << 16 | c >>> 16) + d | 0;
+        b += (c ^ d ^ a) + k[2] - 995338651 | 0;
+        b  = (b << 23 | b >>> 9) + c | 0;
 
-        a = ii(a, b, c, d, k[0], 6, -198630844);
-        d = ii(d, a, b, c, k[7], 10, 1126891415);
-        c = ii(c, d, a, b, k[14], 15, -1416354905);
-        b = ii(b, c, d, a, k[5], 21, -57434055);
-        a = ii(a, b, c, d, k[12], 6, 1700485571);
-        d = ii(d, a, b, c, k[3], 10, -1894986606);
-        c = ii(c, d, a, b, k[10], 15, -1051523);
-        b = ii(b, c, d, a, k[1], 21, -2054922799);
-        a = ii(a, b, c, d, k[8], 6, 1873313359);
-        d = ii(d, a, b, c, k[15], 10, -30611744);
-        c = ii(c, d, a, b, k[6], 15, -1560198380);
-        b = ii(b, c, d, a, k[13], 21, 1309151649);
-        a = ii(a, b, c, d, k[4], 6, -145523070);
-        d = ii(d, a, b, c, k[11], 10, -1120210379);
-        c = ii(c, d, a, b, k[2], 15, 718787259);
-        b = ii(b, c, d, a, k[9], 21, -343485551);
+        a += (c ^ (b | ~d)) + k[0] - 198630844 | 0;
+        a  = (a << 6 | a >>> 26) + b | 0;
+        d += (b ^ (a | ~c)) + k[7] + 1126891415 | 0;
+        d  = (d << 10 | d >>> 22) + a | 0;
+        c += (a ^ (d | ~b)) + k[14] - 1416354905 | 0;
+        c  = (c << 15 | c >>> 17) + d | 0;
+        b += (d ^ (c | ~a)) + k[5] - 57434055 | 0;
+        b  = (b << 21 |b >>> 11) + c | 0;
+        a += (c ^ (b | ~d)) + k[12] + 1700485571 | 0;
+        a  = (a << 6 | a >>> 26) + b | 0;
+        d += (b ^ (a | ~c)) + k[3] - 1894986606 | 0;
+        d  = (d << 10 | d >>> 22) + a | 0;
+        c += (a ^ (d | ~b)) + k[10] - 1051523 | 0;
+        c  = (c << 15 | c >>> 17) + d | 0;
+        b += (d ^ (c | ~a)) + k[1] - 2054922799 | 0;
+        b  = (b << 21 |b >>> 11) + c | 0;
+        a += (c ^ (b | ~d)) + k[8] + 1873313359 | 0;
+        a  = (a << 6 | a >>> 26) + b | 0;
+        d += (b ^ (a | ~c)) + k[15] - 30611744 | 0;
+        d  = (d << 10 | d >>> 22) + a | 0;
+        c += (a ^ (d | ~b)) + k[6] - 1560198380 | 0;
+        c  = (c << 15 | c >>> 17) + d | 0;
+        b += (d ^ (c | ~a)) + k[13] + 1309151649 | 0;
+        b  = (b << 21 |b >>> 11) + c | 0;
+        a += (c ^ (b | ~d)) + k[4] - 145523070 | 0;
+        a  = (a << 6 | a >>> 26) + b | 0;
+        d += (b ^ (a | ~c)) + k[11] - 1120210379 | 0;
+        d  = (d << 10 | d >>> 22) + a | 0;
+        c += (a ^ (d | ~b)) + k[2] + 718787259 | 0;
+        c  = (c << 15 | c >>> 17) + d | 0;
+        b += (d ^ (c | ~a)) + k[9] - 343485551 | 0;
+        b  = (b << 21 | b >>> 11) + c | 0;
 
-        x[0] = add32(a, x[0]);
-        x[1] = add32(b, x[1]);
-        x[2] = add32(c, x[2]);
-        x[3] = add32(d, x[3]);
+        x[0] = a + x[0] | 0;
+        x[1] = b + x[1] | 0;
+        x[2] = c + x[2] | 0;
+        x[3] = d + x[3] | 0;
     }
 
     function md5blk(s) {
@@ -4722,13 +4832,13 @@ process.umask = function() { return 0; };
     return SparkMD5;
 }));
 
-},{}],24:[function(require,module,exports){
+},{}],23:[function(require,module,exports){
 'use strict';
 
 var utils = require(1);
-var ajax = require(11);
-var Checkpointer = require(13);
-var genReplicationId = require(18);
+var ajax = require(10);
+var Checkpointer = require(12);
+var genReplicationId = require(17);
 
 function parseDump(data) {
   var docs = [];
@@ -4834,5 +4944,5 @@ if (typeof window !== 'undefined' && window.PouchDB) {
   window.PouchDB.plugin(exports);
 }
 
-},{"1":1,"11":11,"13":13,"18":18}]},{},[24])(24)
+},{"1":1,"10":10,"12":12,"17":17}]},{},[23])(23)
 });
